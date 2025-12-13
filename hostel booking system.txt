@@ -1,0 +1,475 @@
+import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpExchange;
+import java.io.*;
+import java.net.InetSocketAddress;
+import java.util.*;
+import java.nio.charset.StandardCharsets;
+
+public class CollegeHostelSystem {
+
+    private static List<Room> rooms = new ArrayList<>();
+    private static List<Student> students = new ArrayList<>();
+    private static Map<String, String> bookings = new HashMap<>();
+    private static Map<String, String> sessions = new HashMap<>();
+
+    public static void main(String[] args) throws IOException {
+        initializeData();
+
+        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+
+        server.createContext("/", new HomeHandler());
+        server.createContext("/student-login", new StudentLoginHandler());
+        server.createContext("/student-register", new StudentRegisterHandler());
+        server.createContext("/admin-login", new AdminLoginHandler());
+        server.createContext("/room-list", new RoomListHandler());
+        server.createContext("/book-room", new BookRoomHandler());
+        server.createContext("/my-booking", new MyBookingHandler());
+        server.createContext("/cancel-booking", new CancelBookingHandler());
+        server.createContext("/admin-dashboard", new AdminDashboardHandler());
+        server.createContext("/logout", new LogoutHandler());
+        server.createContext("/login-student", new LoginStudentHandler());
+        server.createContext("/login-admin", new LoginAdminHandler());
+        server.createContext("/register-student", new RegisterStudentHandler());
+
+        server.setExecutor(null);
+        server.start();
+
+        System.out.println("🚀 College Hostel Booking System Started!");
+        System.out.println("🌐 Open: http://localhost:8080");
+        System.out.println("🎓 Student: john_doe / password123");
+        System.out.println("👨‍💼 Admin: admin / 12345");
+    }
+
+    static void initializeData() {
+        rooms.add(new Room(101, "Single", "AC", true));
+        rooms.add(new Room(102, "Double", "Non-AC", true));
+        rooms.add(new Room(103, "Triple", "AC", true));
+        rooms.add(new Room(104, "Single", "Non-AC", true));
+
+        students.add(new Student("john_doe", "password123", "John Doe", "2023001", "Computer Science"));
+    }
+
+    // Utility methods
+    private static void sendHtmlResponse(HttpExchange exchange, String html) throws IOException {
+        exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+        exchange.sendResponseHeaders(200, html.getBytes(StandardCharsets.UTF_8).length);
+        OutputStream os = exchange.getResponseBody();
+        os.write(html.getBytes(StandardCharsets.UTF_8));
+        os.close();
+    }
+
+    private static void sendRedirect(HttpExchange exchange, String location) throws IOException {
+        exchange.getResponseHeaders().set("Location", location);
+        exchange.sendResponseHeaders(302, -1);
+    }
+
+    private static String getSessionId(HttpExchange exchange) {
+        String cookie = exchange.getRequestHeaders().getFirst("Cookie");
+        if (cookie != null && cookie.contains("sessionId=")) {
+            return cookie.substring(cookie.indexOf("sessionId=") + 10,
+                    cookie.indexOf(";", cookie.indexOf("sessionId=")) > 0 ?
+                            cookie.indexOf(";", cookie.indexOf("sessionId=")) : cookie.length());
+        }
+        return null;
+    }
+
+    private static void setSessionCookie(HttpExchange exchange, String sessionId) {
+        exchange.getResponseHeaders().add("Set-Cookie", "sessionId=" + sessionId + "; Path=/");
+    }
+
+    private static Map<String, String> parseFormData(String formData) {
+        Map<String, String> params = new HashMap<>();
+        for (String pair : formData.split("&")) {
+            String[] keyValue = pair.split("=");
+            if (keyValue.length == 2) {
+                params.put(keyValue[0], java.net.URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8));
+            }
+        }
+        return params;
+    }
+
+    private static Student authenticateStudent(String username, String password) {
+        for (Student student : students) {
+            if (student.getUsername().equals(username) && student.getPassword().equals(password)) {
+                return student;
+            }
+        }
+        return null;
+    }
+
+    private static Student findStudentByUsername(String username) {
+        for (Student student : students) {
+            if (student.getUsername().equals(username)) {
+                return student;
+            }
+        }
+        return null;
+    }
+
+    private static Room findRoomByNumber(int roomNo) {
+        for (Room room : rooms) {
+            if (room.getRoomNo() == roomNo) {
+                return room;
+            }
+        }
+        return null;
+    }
+
+    private static String calculatePrice(Room room) {
+        int basePrice = 0;
+        switch (room.getSharingType()) {
+            case "Single": basePrice = 8000; break;
+            case "Double": basePrice = 5000; break;
+            case "Triple": basePrice = 3500; break;
+        }
+        if ("AC".equals(room.getAcType())) {
+            basePrice += 2000;
+        }
+        return "₹" + basePrice;
+    }
+
+    // Handlers
+    static class HomeHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String html = "<!DOCTYPE html><html><head><title>College Hostel Booking</title><style>" +
+                    "body{font-family:Arial;margin:0;padding:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;}" +
+                    ".container{max-width:1200px;margin:0 auto;padding:20px;}" +
+                    ".header{background:white;padding:30px;border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.2);margin-bottom:40px;text-align:center;}" +
+                    ".card-container{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:30px;margin-top:50px;}" +
+                    ".card{background:white;padding:30px;border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.1);text-align:center;}" +
+                    ".btn{display:inline-block;padding:12px 25px;background:#667eea;color:white;text-decoration:none;border-radius:8px;margin:10px;}" +
+                    ".btn-student{background:#4CAF50;}.btn-register{background:#ff9800;}.btn-admin{background:#ff6b6b;}" +
+                    "</style></head><body><div class='container'><div class='header'><h1>🏠 College Hostel Booking</h1></div>" +
+                    "<div class='card-container'><div class='card'><h3>🎓 Student Login</h3><a href='/student-login' class='btn btn-student'>Login</a></div>" +
+                    "<div class='card'><h3>📝 Student Register</h3><a href='/student-register' class='btn btn-register'>Register</a></div>" +
+                    "<div class='card'><h3>👨‍💼 Admin Login</h3><a href='/admin-login' class='btn btn-admin'>Login</a></div></div></div></body></html>";
+            sendHtmlResponse(exchange, html);
+        }
+    }
+
+    static class StudentLoginHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String html = "<!DOCTYPE html><html><head><title>Student Login</title><style>" +
+                    "body{font-family:Arial;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;}" +
+                    ".login-container{background:white;padding:40px;border-radius:15px;box-shadow:0 15px 35px rgba(0,0,0,0.2);width:100%;max-width:400px;}" +
+                    "h2{text-align:center;color:#333;}.form-group{margin-bottom:20px;}input{width:100%;padding:12px;border:1px solid #ddd;border-radius:5px;}" +
+                    ".btn{width:100%;padding:12px;background:#4CAF50;color:white;border:none;border-radius:5px;cursor:pointer;}" +
+                    "</style></head><body><div class='login-container'><h2>🎓 Student Login</h2>" +
+                    "<form method='POST' action='/login-student'><div class='form-group'><input type='text' name='username' placeholder='Username' required></div>" +
+                    "<div class='form-group'><input type='password' name='password' placeholder='Password' required></div>" +
+                    "<button type='submit' class='btn'>Login</button></form><p>Demo: john_doe / password123</p>" +
+                    "<a href='/'>Back to Home</a></div></body></html>";
+            sendHtmlResponse(exchange, html);
+        }
+    }
+
+    static class StudentRegisterHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String html = "<!DOCTYPE html><html><head><title>Student Register</title><style>" +
+                    "body{font-family:Arial;background:linear-gradient(135deg,#ff9800 0%,#e68900 100%);margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;}" +
+                    ".form-container{background:white;padding:40px;border-radius:15px;box-shadow:0 15px 35px rgba(0,0,0,0.2);width:100%;max-width:400px;}" +
+                    "h2{text-align:center;color:#333;}.form-group{margin-bottom:15px;}input{width:100%;padding:10px;border:1px solid #ddd;border-radius:5px;}" +
+                    ".btn{width:100%;padding:12px;background:#ff9800;color:white;border:none;border-radius:5px;cursor:pointer;}" +
+                    "</style></head><body><div class='form-container'><h2>📝 Student Register</h2>" +
+                    "<form method='POST' action='/register-student'><div class='form-group'><input type='text' name='name' placeholder='Full Name' required></div>" +
+                    "<div class='form-group'><input type='text' name='username' placeholder='Username' required></div>" +
+                    "<div class='form-group'><input type='text' name='rollNo' placeholder='Roll Number' required></div>" +
+                    "<div class='form-group'><input type='text' name='department' placeholder='Department' required></div>" +
+                    "<div class='form-group'><input type='password' name='password' placeholder='Password' required></div>" +
+                    "<button type='submit' class='btn'>Register</button></form><a href='/'>Back to Home</a></div></body></html>";
+            sendHtmlResponse(exchange, html);
+        }
+    }
+
+    static class RoomListHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String sessionId = getSessionId(exchange);
+            String studentUsername = sessions.get(sessionId);
+
+            if (studentUsername == null) {
+                sendRedirect(exchange, "/student-login");
+                return;
+            }
+
+            Student student = findStudentByUsername(studentUsername);
+            StringBuilder roomCards = new StringBuilder();
+
+            for (Room room : rooms) {
+                String button = room.isAvailable() ?
+                        "<a href='/book-room?room=" + room.getRoomNo() + "' class='btn'>Book Now</a>" :
+                        "<button class='btn' disabled>Booked</button>";
+
+                roomCards.append("<div style='background:white;padding:20px;margin:10px;border-radius:10px;border-left:5px solid " +
+                        (room.isAvailable() ? "#4CAF50" : "#ff6b6b") + ";'><h3>Room " + room.getRoomNo() + "</h3>" +
+                        "<p>Type: " + room.getSharingType() + " " + room.getAcType() + "</p>" +
+                        "<p>Price: " + calculatePrice(room) + "</p>" + button + "</div>");
+            }
+
+            String html = "<!DOCTYPE html><html><head><title>Available Rooms</title><style>" +
+                    "body{font-family:Arial;margin:0;padding:20px;background:#f5f5f5;}.container{max-width:800px;margin:0 auto;}" +
+                    ".header{background:white;padding:20px;border-radius:10px;margin-bottom:20px;}.btn{padding:10px 20px;background:#4CAF50;color:white;text-decoration:none;border-radius:5px;}" +
+                    "</style></head><body><div class='container'><div class='header'><h2>Welcome, " +
+                    (student != null ? student.getName() : "Student") + "!</h2><a href='/my-booking'>My Booking</a> | <a href='/logout'>Logout</a></div>" +
+                    "<h3>Available Rooms</h3>" + roomCards.toString() + "</div></body></html>";
+
+            sendHtmlResponse(exchange, html);
+        }
+    }
+
+    static class MyBookingHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String sessionId = getSessionId(exchange);
+            String studentUsername = sessions.get(sessionId);
+
+            if (studentUsername == null) {
+                sendRedirect(exchange, "/student-login");
+                return;
+            }
+
+            Student student = findStudentByUsername(studentUsername);
+            String roomNo = bookings.get(studentUsername);
+            String bookingContent;
+
+            if (roomNo != null) {
+                Room room = findRoomByNumber(Integer.parseInt(roomNo));
+                bookingContent = "<div style='background:white;padding:30px;border-radius:10px;text-align:center;'><h2>✅ Your Booking</h2>" +
+                        "<p><strong>Room " + roomNo + " - " + room.getSharingType() + " " + room.getAcType() + "</strong></p>" +
+                        "<p>Price: " + calculatePrice(room) + "</p>" +
+                        "<a href='/cancel-booking' style='background:#ff6b6b;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;'>Cancel Booking</a></div>";
+            } else {
+                bookingContent = "<div style='background:white;padding:30px;border-radius:10px;text-align:center;'><h2>❌ No Booking</h2>" +
+                        "<p>You don't have any active booking.</p>" +
+                        "<a href='/room-list' style='background:#4CAF50;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;'>Browse Rooms</a></div>";
+            }
+
+            String html = "<!DOCTYPE html><html><head><title>My Booking</title><style>" +
+                    "body{font-family:Arial;margin:0;padding:20px;background:#f5f5f5;}.container{max-width:600px;margin:0 auto;}" +
+                    ".header{background:white;padding:20px;border-radius:10px;margin-bottom:20px;}" +
+                    "</style></head><body><div class='container'><div class='header'><h2>My Booking</h2>" +
+                    "<a href='/room-list'>Back to Rooms</a> | <a href='/logout'>Logout</a></div>" + bookingContent + "</div></body></html>";
+
+            sendHtmlResponse(exchange, html);
+        }
+    }
+
+    static class CancelBookingHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String sessionId = getSessionId(exchange);
+            String studentUsername = sessions.get(sessionId);
+
+            if (studentUsername != null) {
+                String roomNo = bookings.get(studentUsername);
+                if (roomNo != null) {
+                    Room room = findRoomByNumber(Integer.parseInt(roomNo));
+                    if (room != null) {
+                        room.setAvailable(true);
+                    }
+                    bookings.remove(studentUsername);
+                }
+            }
+            sendRedirect(exchange, "/my-booking");
+        }
+    }
+
+    static class AdminDashboardHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String sessionId = getSessionId(exchange);
+            if (!"admin".equals(sessions.get(sessionId))) {
+                sendRedirect(exchange, "/admin-login");
+                return;
+            }
+
+            long totalRooms = rooms.size();
+            long availableRooms = rooms.stream().filter(Room::isAvailable).count();
+            long bookedRooms = totalRooms - availableRooms;
+
+            StringBuilder bookingsTable = new StringBuilder();
+            for (Map.Entry<String, String> entry : bookings.entrySet()) {
+                String username = entry.getKey();
+                String roomNo = entry.getValue();
+                Student student = findStudentByUsername(username);
+                if (student != null) {
+                    bookingsTable.append("<tr><td>").append(student.getName()).append("</td><td>").append(student.getRollNo())
+                            .append("</td><td>").append(roomNo).append("</td></tr>");
+                }
+            }
+
+            String html = "<!DOCTYPE html><html><head><title>Admin Dashboard</title><style>" +
+                    "body{font-family:Arial;margin:0;padding:20px;background:#f5f5f5;}.container{max-width:1000px;margin:0 auto;}" +
+                    ".header{background:white;padding:20px;border-radius:10px;margin-bottom:20px;text-align:center;}" +
+                    ".stats{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:30px;}" +
+                    ".stat-card{background:white;padding:20px;border-radius:10px;text-align:center;}" +
+                    "table{width:100%;border-collapse:collapse;background:white;}th,td{padding:12px;text-align:left;border-bottom:1px solid #ddd;}" +
+                    "th{background:#667eea;color:white;}.btn{padding:10px 20px;background:#667eea;color:white;text-decoration:none;border-radius:5px;}" +
+                    "</style></head><body><div class='container'><div class='header'><h1>👨‍💼 Admin Dashboard</h1>" +
+                    "<a href='/logout' class='btn' style='background:#ff6b6b;'>Logout</a></div>" +
+                    "<div class='stats'><div class='stat-card'><h3>" + totalRooms + "</h3><p>Total Rooms</p></div>" +
+                    "<div class='stat-card'><h3>" + availableRooms + "</h3><p>Available</p></div>" +
+                    "<div class='stat-card'><h3>" + bookedRooms + "</h3><p>Booked</p></div></div>" +
+                    "<h3>Current Bookings</h3><table><tr><th>Student</th><th>Roll No</th><th>Room</th></tr>" +
+                    bookingsTable.toString() + "</table></div></body></html>";
+
+            sendHtmlResponse(exchange, html);
+        }
+    }
+
+    static class AdminLoginHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String html = "<!DOCTYPE html><html><head><title>Admin Login</title><style>" +
+                    "body{font-family:Arial;background:linear-gradient(135deg,#ff6b6b 0%,#ee5a5a 100%);margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;}" +
+                    ".login-container{background:white;padding:40px;border-radius:15px;box-shadow:0 15px 35px rgba(0,0,0,0.2);width:100%;max-width:400px;}" +
+                    "h2{text-align:center;color:#333;}.form-group{margin-bottom:20px;}input{width:100%;padding:12px;border:1px solid #ddd;border-radius:5px;}" +
+                    ".btn{width:100%;padding:12px;background:#ff6b6b;color:white;border:none;border-radius:5px;cursor:pointer;}" +
+                    "</style></head><body><div class='login-container'><h2>👨‍💼 Admin Login</h2>" +
+                    "<form method='POST' action='/login-admin'><div class='form-group'><input type='text' name='username' placeholder='Username' required></div>" +
+                    "<div class='form-group'><input type='password' name='password' placeholder='Password' required></div>" +
+                    "<button type='submit' class='btn'>Login</button></form><p>Demo: admin / 12345</p>" +
+                    "<a href='/'>Back to Home</a></div></body></html>";
+            sendHtmlResponse(exchange, html);
+        }
+    }
+
+    static class LoginStudentHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendRedirect(exchange, "/student-login");
+                return;
+            }
+
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, String> params = parseFormData(body);
+            String username = params.get("username");
+            String password = params.get("password");
+
+            Student student = authenticateStudent(username, password);
+            if (student != null) {
+                String sessionId = UUID.randomUUID().toString();
+                sessions.put(sessionId, username);
+                setSessionCookie(exchange, sessionId);
+                sendRedirect(exchange, "/room-list");
+            } else {
+                sendRedirect(exchange, "/student-login?error=1");
+            }
+        }
+    }
+
+    static class LoginAdminHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendRedirect(exchange, "/admin-login");
+                return;
+            }
+
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, String> params = parseFormData(body);
+            String username = params.get("username");
+            String password = params.get("password");
+
+            if ("admin".equals(username) && "12345".equals(password)) {
+                String sessionId = UUID.randomUUID().toString();
+                sessions.put(sessionId, "admin");
+                setSessionCookie(exchange, sessionId);
+                sendRedirect(exchange, "/admin-dashboard");
+            } else {
+                sendRedirect(exchange, "/admin-login?error=1");
+            }
+        }
+    }
+
+    static class RegisterStudentHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendRedirect(exchange, "/student-register");
+                return;
+            }
+
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, String> params = parseFormData(body);
+            String name = params.get("name");
+            String username = params.get("username");
+            String rollNo = params.get("rollNo");
+            String department = params.get("department");
+            String password = params.get("password");
+
+            if (findStudentByUsername(username) == null) {
+                students.add(new Student(username, password, name, rollNo, department));
+            }
+            sendRedirect(exchange, "/student-login");
+        }
+    }
+
+    static class BookRoomHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String sessionId = getSessionId(exchange);
+            String studentUsername = sessions.get(sessionId);
+
+            if (studentUsername == null) {
+                sendRedirect(exchange, "/student-login");
+                return;
+            }
+
+            if (!bookings.containsKey(studentUsername)) {
+                String query = exchange.getRequestURI().getQuery();
+                String roomNo = query != null ? query.substring(query.indexOf("=") + 1) : null;
+
+                Room room = findRoomByNumber(Integer.parseInt(roomNo));
+                if (room != null && room.isAvailable()) {
+                    room.setAvailable(false);
+                    bookings.put(studentUsername, roomNo);
+                }
+            }
+            sendRedirect(exchange, "/my-booking");
+        }
+    }
+
+    static class LogoutHandler implements HttpHandler {
+        public void handle(HttpExchange exchange) throws IOException {
+            String sessionId = getSessionId(exchange);
+            sessions.remove(sessionId);
+            sendRedirect(exchange, "/");
+        }
+    }
+}
+
+class Room {
+    private int roomNo;
+    private String sharingType;
+    private String acType;
+    private boolean available;
+
+    public Room(int roomNo, String sharingType, String acType, boolean available) {
+        this.roomNo = roomNo;
+        this.sharingType = sharingType;
+        this.acType = acType;
+        this.available = available;
+    }
+
+    public int getRoomNo() { return roomNo; }
+    public String getSharingType() { return sharingType; }
+    public String getAcType() { return acType; }
+    public boolean isAvailable() { return available; }
+    public void setAvailable(boolean available) { this.available = available; }
+}
+
+class Student {
+    private String username;
+    private String password;
+    private String name;
+    private String rollNo;
+    private String department;
+
+    public Student(String username, String password, String name, String rollNo, String department) {
+        this.username = username;
+        this.password = password;
+        this.name = name;
+        this.rollNo = rollNo;
+        this.department = department;
+    }
+
+    public String getUsername() { return username; }
+    public String getPassword() { return password; }
+    public String getName() { return name; }
+    public String getRollNo() { return rollNo; }
+    public String getDepartment() { return department; }
+}
